@@ -17,6 +17,6 @@ services:
       - key: PALWORLD_API_PASSWORD
         sync: false
       - key: UPDATE_INTERVAL
-        value: "60"
+        value: "30"
       - key: STATUS_MESSAGE_ID
         sync: false
