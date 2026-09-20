@@ -126,13 +126,16 @@ class StatusBot(commands.Bot):
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         try:
-            await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+            request = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+            # Free UptimeRobot HTTP(s) monitors use HEAD by default. HEAD is still
+            # incoming HTTP traffic for Render, but its response must not contain a body.
+            is_head_request = request.startswith(b"HEAD ")
             writer.write(
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: application/json\r\n"
                 b"Content-Length: 15\r\n"
                 b"Connection: close\r\n\r\n"
-                b'{"status":"ok"}'
+                + (b"" if is_head_request else b'{"status":"ok"}')
             )
             await writer.drain()
         except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError):
