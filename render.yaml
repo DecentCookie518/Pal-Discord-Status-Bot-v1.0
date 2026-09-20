@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: palworld-discord-status-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /health
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: DISCORD_CHANNEL_ID
+        sync: false
+      - key: PALWORLD_API_URL
+        sync: false
+      - key: PALWORLD_API_PASSWORD
+        sync: false
+      - key: UPDATE_INTERVAL
+        value: "120"
+      - key: STATUS_MESSAGE_ID
+        sync: false
