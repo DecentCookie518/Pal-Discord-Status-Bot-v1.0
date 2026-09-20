@@ -3,6 +3,7 @@ services:
     name: palworld-discord-status-bot
     runtime: python
     plan: free
+    region: 
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     healthCheckPath: /health
@@ -16,6 +17,6 @@ services:
       - key: PALWORLD_API_PASSWORD
         sync: false
       - key: UPDATE_INTERVAL
-        value: "120"
+        value: "60"
       - key: STATUS_MESSAGE_ID
         sync: false
