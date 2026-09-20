@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
+import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
-from aiohttp import web
 import discord
 from discord.ext import commands, tasks
 
@@ -91,7 +92,7 @@ class StatusBot(commands.Bot):
         self.settings = settings
         self.http_session: aiohttp.ClientSession | None = None
         self.status_message: discord.Message | None = None
-        self.health_runner: web.AppRunner | None = None
+        self.health_server: asyncio.AbstractServer | None = None
         self.status_loop.change_interval(seconds=settings.update_interval)
 
     async def setup_hook(self) -> None:
@@ -105,31 +106,55 @@ class StatusBot(commands.Bot):
             self.status_loop.cancel()
         if self.http_session and not self.http_session.closed:
             await self.http_session.close()
-        if self.health_runner:
-            await self.health_runner.cleanup()
+        if self.health_server:
+            self.health_server.close()
+            await self.health_server.wait_closed()
         await super().close()
 
     async def start_health_server(self) -> None:
-        app = web.Application()
-        app.router.add_get("/health", self.health)
-        self.health_runner = web.AppRunner(app, access_log=None)
-        await self.health_runner.setup()
-        site = web.TCPSite(self.health_runner, host="0.0.0.0", port=self.settings.health_port)
-        await site.start()
-        LOG.info("Health endpoint listening on port %s", self.settings.health_port)
+        # Keep an explicit server reference. Render needs a TCP listener on PORT,
+        # and this tiny handler avoids coupling its health check to Discord or Palworld.
+        self.health_server = await asyncio.start_server(
+            self.handle_health_request,
+            host="0.0.0.0",
+            port=self.settings.health_port,
+        )
+        addresses = ", ".join(str(socket.getsockname()) for socket in self.health_server.sockets or [])
+        LOG.info("Health endpoint listening on %s", addresses)
 
-    async def health(self, _request: web.Request) -> web.Response:
-        # This intentionally does not call Discord or Palworld: it is a liveness check.
-        return web.json_response({"status": "ok"})
+    async def handle_health_request(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        try:
+            await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+            writer.write(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: 15\r\n"
+                b"Connection: close\r\n\r\n"
+                b'{"status":"ok"}'
+            )
+            await writer.drain()
+        except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError):
+            pass
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass
 
     async def palworld_get(self, endpoint: str) -> dict[str, Any]:
         if self.http_session is None:
             raise PalworldAPIError("HTTP session is not ready")
 
-        auth = aiohttp.BasicAuth("admin", self.settings.api_password) if self.settings.api_password else None
+        headers: dict[str, str] = {}
+        if self.settings.api_password:
+            credentials = f"admin:{self.settings.api_password}".encode("utf-8")
+            headers["Authorization"] = f"Basic {base64.b64encode(credentials).decode('ascii')}"
         url = f"{self.settings.api_url}/{endpoint.lstrip('/')}"
         try:
-            async with self.http_session.get(url, auth=auth) as response:
+            async with self.http_session.get(url, headers=headers) as response:
                 if response.status == 401:
                     raise PalworldAPIError("Unauthorized (check PALWORLD_API_PASSWORD; username is admin)")
                 if response.status >= 400:
